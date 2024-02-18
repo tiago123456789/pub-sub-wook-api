@@ -4,6 +4,8 @@ import (
 	"database/sql"
 	"os"
 	"strings"
+
+	_ "github.com/lib/pq"
 )
 
 func Start() (*sql.DB, error) {

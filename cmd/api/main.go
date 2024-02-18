@@ -2,8 +2,13 @@ package main
 
 import (
 	"log"
+	"os"
 
-	"github.com/tiago123456789/pub-sub-wook-api/config"
+	"github.com/gofiber/fiber/v2"
+	"github.com/google/uuid"
+	"github.com/tiago123456789/pub-sub-wook-api/internal/config"
+	"github.com/tiago123456789/pub-sub-wook-api/internal/model"
+	"github.com/tiago123456789/pub-sub-wook-api/internal/repository"
 
 	"github.com/joho/godotenv"
 )
@@ -14,37 +19,6 @@ type URLSubscribed struct {
 	Data    map[string]interface{} `json:"data"`
 	Url     string                 `json:"url"`
 }
-
-// func notifySubscribes(urlSubscribed []URLSubscribed) {
-// 	for _, item := range urlSubscribed {
-
-// 		jsonBody, _ := json.Marshal(item.Data)
-// 		bodyReader := bytes.NewReader(jsonBody)
-
-// 		req, _ := http.NewRequest(item.Method, item.Url, bodyReader)
-
-// 		for key, value := range item.Headers {
-// 			req.Header.Set(key, value)
-// 		}
-// 		req.Header.Set("Content-Type", "application/json")
-
-// 		client := http.Client{
-// 			Timeout: 5 * time.Second,
-// 		}
-
-// 		client.Do(req)
-// 	}
-
-// }
-
-// func SendMessage(client *sqs.Client, queueUrl string, messageBody string) error {
-// 	_, err := client.SendMessage(context.TODO(), &sqs.SendMessageInput{
-// 		MessageBody: &messageBody,
-// 		QueueUrl:    aws.String(queueUrl),
-// 	})
-
-// 	return err
-// }
 
 func main() {
 	err := godotenv.Load()
@@ -57,67 +31,72 @@ func main() {
 		log.Fatal(err)
 	}
 
-	// httpClient := &http.Client{
-	// 	Transport: &http.Transport{
-	// 		MaxIdleConns:        10,
-	// 		MaxIdleConnsPerHost: 10,
-	// 		IdleConnTimeout:     90 * time.Second,
-	// 	},
-	// }
+	urlProducerRepository := repository.NewUrlProducerRepository(db)
 
-	// cfg, err := config.LoadDefaultConfig(context.Background(),
-	// 	config.WithSharedConfigProfile("tiago"),
-	// 	config.WithHTTPClient(httpClient), // Use your custom HTTP client here
-	// )
-	// if err != nil {
-	// 	panic("unable to load SDK config, " + err.Error())
-	// }
+	queue := config.NewQueue()
+	queueUrl := os.Getenv("QUEUE_URL")
 
-	// // Create a new SQS client
-	// client := sqs.NewFromConfig(cfg)
+	app := fiber.New(fiber.Config{
+		Prefork: true,
+	})
 
-	// // Specify the URL of the SQS queue
-	// queueURL := "https://sqs.us-east-1.amazonaws.com/507403822990/new_request_dev"
+	app.Post("/urls-producers", func(c *fiber.Ctx) error {
+		urlProducer := model.UrlProducer{
+			Enabled: true,
+			Key:     uuid.NewString(),
+		}
+		urlProducerCreated, err := urlProducerRepository.Create(urlProducer)
+		if err != nil {
+			log.Fatal(err)
+			return c.Status(500).JSON(fiber.Map{
+				"message": "Interval server error",
+			})
+		}
 
-	// if err != nil {
-	// 	fmt.Printf("Failed to initialize new session: %v", err)
-	// 	return
-	// }
+		return c.Status(200).JSON(urlProducerCreated)
+	})
 
-	// app := fiber.New()
+	app.Post("/:token", func(c *fiber.Ctx) error {
+		token := c.Params("token")
+		key := c.Get("key")
+		// tokenConverted, _ := strconv.Atoi(token)
+		// urlProducer, _ := urlProducerRepository.GetById(tokenConverted)
+		// if urlProducer.Id == 0 || urlProducer.Key != key {
+		// 	return c.Status(fiber.StatusUnprocessableEntity).JSON(fiber.Map{
+		// 		"errors": "Invalid URL.",
+		// 	})
+		// }
 
-	// type Payload struct {
-	// 	Event string                 `json:"event"`
-	// 	Token string                 `json:"token"`
-	// 	Data  map[string]interface{} `json:"data"`
-	// }
+		// payload := new(model.Payload)
+		// json.Unmarshal(c.Body(), payload)
 
-	// app.Post("/:token", func(c *fiber.Ctx) error {
-	// 	var payload Payload
+		// payload.Token = token
+		dataJson := `{ "key":"` + key + `", "token":` + token + `,`
 
-	// 	if err := c.BodyParser(&payload); err != nil {
-	// 		return c.Status(fiber.StatusUnprocessableEntity).JSON(fiber.Map{
-	// 			"errors": err.Error(),
-	// 		})
-	// 	}
+		event := c.Query("event")
+		if len(event) > 0 {
+			dataJson += `"event":` + c.Query("event") + `,`
+			// payload.Event = c.Query("event")
+		}
 
-	// 	payload.Token = c.Params("token")
-	// 	if len(payload.Event) == 0 {
-	// 		payload.Event = c.Query("event")
-	// 	}
+		dataJson += ` "payload": ` + string(c.Body()) + "}"
+		// dataJson, _ := json.Marshal(payload)
 
-	// 	dataJSON, _ := json.Marshal(payload)
+		// fmt.Println(dataJson)
+		err = queue.SendMessage(config.Message{
+			Queue:   queueUrl,
+			Message: string(dataJson),
+		})
 
-	// 	err = SendMessage(client, queueURL, string(dataJSON))
-	// 	if err != nil {
-	// 		log.Fatal(err)
-	// 		return c.Status(500).JSON(fiber.Map{
-	// 			"message": "Interval server error",
-	// 		})
-	// 	}
+		if err != nil {
+			log.Fatal(err)
+			return c.Status(500).JSON(fiber.Map{
+				"message": "Interval server error",
+			})
+		}
 
-	// 	return c.SendStatus(202)
-	// })
+		return c.SendStatus(202)
+	})
 
-	// app.Listen(":3000")
+	app.Listen(":3000")
 }
